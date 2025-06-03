@@ -1,0 +1,81 @@
+# Build directories
+build/
+bin/
+lib/
+obj/
+
+# Extracted files
+extracted/
+
+# Visual Studio files
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.sdf
+*.opensdf
+*.suo
+*.user
+*.aps
+*.pch
+*.vspscc
+*_i.c
+*_p.c
+*.ncb
+*.tlb
+*.tlh
+*.bak
+*.cache
+*.ilk
+*.log
+*.lib
+*.sbr
+*.exe
+*.dll
+*.pdb
+*.idb
+*.res
+*.manifest
+*.dep
+*.iobj
+*.ipdb
+
+# CMake files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+
+# Compiler output
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+
+# Assembly files (optional, uncomment if you don't want to track them)
+# *.asm
+# *.s
+
+# Temporary files
+*.tmp
+*.temp
+*~
+
+# IDE files
+.vs/
+.vscode/
+*.swp
+*.swo
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini 
