@@ -302,7 +302,7 @@ def generate_summary_report(lib_file, obj_dir, asm_dir, output_dir):
     
     print(f"✓ Generated extraction report: {report_file}")
 
-def convert_debug_to_release_lib(debug_lib_file, release_lib_file, lib_tool, editbin_tool):
+def convert_debug_to_release_lib(debug_lib_file, release_lib_file, lib_tool, editbin_tool, output_base_dir=None):
     """将debug库转换为release库"""
     print(f"\n=== Converting debug library to release library ===")
     print(f"Source (Debug): {debug_lib_file}")
@@ -323,6 +323,16 @@ def convert_debug_to_release_lib(debug_lib_file, release_lib_file, lib_tool, edi
             print("Failed to extract .obj files from debug library")
             return False
         
+        # 可选：保存debug提取的文件到指定目录
+        if output_base_dir:
+            debug_output_dir = os.path.join(output_base_dir, "debug", "obj")
+            print(f"Saving debug .obj files to: {debug_output_dir}")
+            os.makedirs(debug_output_dir, exist_ok=True)
+            obj_files = glob.glob(os.path.join(temp_obj_dir, "*.obj"))
+            for obj_file in obj_files:
+                target_path = os.path.join(debug_output_dir, os.path.basename(obj_file))
+                shutil.copy2(obj_file, target_path)
+        
         # 步骤2: 处理每个.obj文件，移除调试信息
         print("Step 2: Processing .obj files to remove debug information...")
         obj_files = glob.glob(os.path.join(temp_obj_dir, "*.obj"))
@@ -335,6 +345,15 @@ def convert_debug_to_release_lib(debug_lib_file, release_lib_file, lib_tool, edi
             else:
                 print(f"Warning: Failed to process {os.path.basename(obj_file)}, using original")
                 processed_obj_files.append(obj_file)
+        
+        # 可选：保存处理后的release .obj文件到指定目录
+        if output_base_dir:
+            release_obj_output_dir = os.path.join(output_base_dir, "release", "obj")
+            print(f"Saving processed release .obj files to: {release_obj_output_dir}")
+            os.makedirs(release_obj_output_dir, exist_ok=True)
+            for obj_file in processed_obj_files:
+                target_path = os.path.join(release_obj_output_dir, os.path.basename(obj_file).replace('.processed', ''))
+                shutil.copy2(obj_file, target_path)
         
         # 步骤3: 创建新的release库
         print("Step 3: Creating release library...")
@@ -446,6 +465,258 @@ def analyze_library_differences(debug_lib, release_lib, dumpbin_tool):
     print(f"Debug symbols count: {len(debug_info['symbols'])}")
     print(f"Release symbols count: {len(release_info['symbols'])}")
 
+def generate_conversion_report(debug_lib_file, release_lib_file, output_base_dir):
+    """生成转换报告"""
+    report_file = os.path.join(output_base_dir, "conversion_report.txt")
+    
+    with open(report_file, 'w', encoding='utf-8') as f:
+        f.write("Library Conversion Report\n")
+        f.write("=" * 50 + "\n\n")
+        f.write(f"Source (Debug): {debug_lib_file}\n")
+        f.write(f"Target (Release): {release_lib_file}\n")
+        f.write(f"Conversion Time: {subprocess.run(['date', '/t'], capture_output=True, text=True, shell=True).stdout.strip()}\n\n")
+        
+        # 文件大小比较
+        if os.path.exists(debug_lib_file) and os.path.exists(release_lib_file):
+            debug_size = os.path.getsize(debug_lib_file)
+            release_size = os.path.getsize(release_lib_file)
+            reduction = debug_size - release_size
+            reduction_percent = (reduction / debug_size) * 100 if debug_size > 0 else 0
+            
+            f.write(f"File Size Comparison:\n")
+            f.write(f"  Debug library:   {debug_size:,} bytes\n")
+            f.write(f"  Release library: {release_size:,} bytes\n")
+            f.write(f"  Size reduction:  {reduction:,} bytes ({reduction_percent:.1f}%)\n\n")
+        
+        # 统计debug .obj文件
+        debug_obj_dir = os.path.join(output_base_dir, "debug", "obj")
+        if os.path.exists(debug_obj_dir):
+            debug_obj_files = glob.glob(os.path.join(debug_obj_dir, "*.obj"))
+            f.write(f"Debug .obj files ({len(debug_obj_files)}):\n")
+            for obj_file in debug_obj_files:
+                size = os.path.getsize(obj_file)
+                f.write(f"  - {os.path.basename(obj_file)} ({size:,} bytes)\n")
+            f.write("\n")
+        
+        # 统计release .obj文件
+        release_obj_dir = os.path.join(output_base_dir, "release", "obj")
+        if os.path.exists(release_obj_dir):
+            release_obj_files = glob.glob(os.path.join(release_obj_dir, "*.obj"))
+            f.write(f"Release .obj files ({len(release_obj_files)}):\n")
+            for obj_file in release_obj_files:
+                size = os.path.getsize(obj_file)
+                f.write(f"  - {os.path.basename(obj_file)} ({size:,} bytes)\n")
+            f.write("\n")
+        
+        f.write("Directory Structure:\n")
+        f.write(f"  {output_base_dir}/\n")
+        f.write(f"  ├── debug/\n")
+        f.write(f"  │   └── obj/          # Original debug .obj files\n")
+        f.write(f"  ├── release/\n")
+        f.write(f"  │   └── obj/          # Processed release .obj files\n")
+        f.write(f"  └── conversion_report.txt\n")
+    
+    print(f"✓ Generated conversion report: {report_file}")
+
+def process_both_configurations(project_root, output_base_dir, lib_tool, dumpbin_tool, clean=False):
+    """同时处理debug和release两个配置的库文件"""
+    print(f"\n=== Processing both Debug and Release configurations ===")
+    
+    # 定义两个配置的库文件路径
+    debug_lib_file = os.path.join(project_root, "build", "lib", "Debug", "utils.lib")
+    release_lib_file = os.path.join(project_root, "build", "lib", "Release", "utils.lib")
+    
+    # 检查文件是否存在
+    debug_exists = os.path.exists(debug_lib_file)
+    release_exists = os.path.exists(release_lib_file)
+    
+    if not debug_exists and not release_exists:
+        print("Error: Neither Debug nor Release library files found.")
+        print("Please build the project first using:")
+        print("  python bootstrap.py --config Debug")
+        print("  python bootstrap.py --config Release")
+        return False
+    
+    if not debug_exists:
+        print(f"Warning: Debug library not found: {debug_lib_file}")
+        print("Skipping Debug configuration.")
+    
+    if not release_exists:
+        print(f"Warning: Release library not found: {release_lib_file}")
+        print("Skipping Release configuration.")
+    
+    success_count = 0
+    total_count = 0
+    
+    # 清理输出目录
+    if clean and os.path.exists(output_base_dir):
+        print("Cleaning output directory...")
+        shutil.rmtree(output_base_dir)
+    
+    # 处理Debug配置
+    if debug_exists:
+        total_count += 1
+        print(f"\n--- Processing Debug configuration ---")
+        print(f"Library: {debug_lib_file}")
+        
+        debug_output_dir = os.path.join(output_base_dir, "debug")
+        debug_obj_dir = os.path.join(debug_output_dir, "obj")
+        debug_asm_dir = os.path.join(debug_output_dir, "asm")
+        
+        # 提取Debug .obj文件
+        if extract_obj_files(debug_lib_file, debug_obj_dir, lib_tool):
+            # 生成Debug .asm文件
+            if generate_asm_files(debug_obj_dir, debug_asm_dir, dumpbin_tool):
+                # 生成Debug报告
+                generate_summary_report(debug_lib_file, debug_obj_dir, debug_asm_dir, debug_output_dir)
+                success_count += 1
+                print("✓ Debug configuration processed successfully")
+            else:
+                print("✗ Failed to generate .asm files for Debug configuration")
+        else:
+            print("✗ Failed to extract .obj files for Debug configuration")
+    
+    # 处理Release配置
+    if release_exists:
+        total_count += 1
+        print(f"\n--- Processing Release configuration ---")
+        print(f"Library: {release_lib_file}")
+        
+        release_output_dir = os.path.join(output_base_dir, "release")
+        release_obj_dir = os.path.join(release_output_dir, "obj")
+        release_asm_dir = os.path.join(release_output_dir, "asm")
+        
+        # 提取Release .obj文件
+        if extract_obj_files(release_lib_file, release_obj_dir, lib_tool):
+            # 生成Release .asm文件
+            if generate_asm_files(release_obj_dir, release_asm_dir, dumpbin_tool):
+                # 生成Release报告
+                generate_summary_report(release_lib_file, release_obj_dir, release_asm_dir, release_output_dir)
+                success_count += 1
+                print("✓ Release configuration processed successfully")
+            else:
+                print("✗ Failed to generate .asm files for Release configuration")
+        else:
+            print("✗ Failed to extract .obj files for Release configuration")
+    
+    # 生成对比报告
+    if debug_exists and release_exists and success_count == 2:
+        generate_comparison_report(debug_lib_file, release_lib_file, output_base_dir, dumpbin_tool)
+    
+    print(f"\n=== Processing completed: {success_count}/{total_count} configurations successful ===")
+    return success_count > 0
+
+def generate_comparison_report(debug_lib_file, release_lib_file, output_base_dir, dumpbin_tool):
+    """生成debug和release的对比报告"""
+    report_file = os.path.join(output_base_dir, "comparison_report.txt")
+    
+    print(f"Generating comparison report...")
+    
+    with open(report_file, 'w', encoding='utf-8') as f:
+        f.write("Debug vs Release Comparison Report\n")
+        f.write("=" * 50 + "\n\n")
+        f.write(f"Analysis Time: {subprocess.run(['date', '/t'], capture_output=True, text=True, shell=True).stdout.strip()}\n\n")
+        
+        # 库文件大小比较
+        debug_size = os.path.getsize(debug_lib_file) if os.path.exists(debug_lib_file) else 0
+        release_size = os.path.getsize(release_lib_file) if os.path.exists(release_lib_file) else 0
+        
+        f.write("Library File Size Comparison:\n")
+        f.write(f"  Debug library:   {debug_size:,} bytes\n")
+        f.write(f"  Release library: {release_size:,} bytes\n")
+        
+        if debug_size > 0 and release_size > 0:
+            size_diff = debug_size - release_size
+            size_diff_percent = (size_diff / debug_size) * 100 if debug_size > 0 else 0
+            f.write(f"  Size difference: {size_diff:,} bytes ({size_diff_percent:.1f}%)\n")
+            f.write(f"  Release is {'smaller' if size_diff > 0 else 'larger'} than Debug\n")
+        f.write("\n")
+        
+        # .obj文件数量和大小比较
+        debug_obj_dir = os.path.join(output_base_dir, "debug", "obj")
+        release_obj_dir = os.path.join(output_base_dir, "release", "obj")
+        
+        debug_obj_files = glob.glob(os.path.join(debug_obj_dir, "*.obj")) if os.path.exists(debug_obj_dir) else []
+        release_obj_files = glob.glob(os.path.join(release_obj_dir, "*.obj")) if os.path.exists(release_obj_dir) else []
+        
+        f.write("Extracted .obj Files Comparison:\n")
+        f.write(f"  Debug .obj files:   {len(debug_obj_files)} files\n")
+        f.write(f"  Release .obj files: {len(release_obj_files)} files\n")
+        
+        if debug_obj_files and release_obj_files:
+            debug_obj_total_size = sum(os.path.getsize(f) for f in debug_obj_files)
+            release_obj_total_size = sum(os.path.getsize(f) for f in release_obj_files)
+            f.write(f"  Debug .obj total size:   {debug_obj_total_size:,} bytes\n")
+            f.write(f"  Release .obj total size: {release_obj_total_size:,} bytes\n")
+            
+            obj_size_diff = debug_obj_total_size - release_obj_total_size
+            obj_size_diff_percent = (obj_size_diff / debug_obj_total_size) * 100 if debug_obj_total_size > 0 else 0
+            f.write(f"  .obj size difference: {obj_size_diff:,} bytes ({obj_size_diff_percent:.1f}%)\n")
+        f.write("\n")
+        
+        # .asm文件数量比较
+        debug_asm_dir = os.path.join(output_base_dir, "debug", "asm")
+        release_asm_dir = os.path.join(output_base_dir, "release", "asm")
+        
+        debug_asm_files = glob.glob(os.path.join(debug_asm_dir, "*.asm")) if os.path.exists(debug_asm_dir) else []
+        release_asm_files = glob.glob(os.path.join(release_asm_dir, "*.asm")) if os.path.exists(release_asm_dir) else []
+        
+        f.write("Generated .asm Files Comparison:\n")
+        f.write(f"  Debug .asm files:   {len(debug_asm_files)} files\n")
+        f.write(f"  Release .asm files: {len(release_asm_files)} files\n")
+        
+        if debug_asm_files and release_asm_files:
+            debug_asm_total_size = sum(os.path.getsize(f) for f in debug_asm_files)
+            release_asm_total_size = sum(os.path.getsize(f) for f in release_asm_files)
+            f.write(f"  Debug .asm total size:   {debug_asm_total_size:,} bytes\n")
+            f.write(f"  Release .asm total size: {release_asm_total_size:,} bytes\n")
+        f.write("\n")
+        
+        # 符号信息比较（如果有dumpbin工具）
+        if dumpbin_tool:
+            f.write("Symbol Analysis:\n")
+            
+            # 分析Debug库符号
+            debug_symbols = []
+            symbols_cmd = [dumpbin_tool, "/SYMBOLS", debug_lib_file]
+            result = run_command(symbols_cmd, capture_output=True)
+            if result:
+                for line in result.stdout.split('\n'):
+                    line = line.strip()
+                    if 'External' in line or 'Static' in line:
+                        debug_symbols.append(line)
+            
+            # 分析Release库符号
+            release_symbols = []
+            symbols_cmd = [dumpbin_tool, "/SYMBOLS", release_lib_file]
+            result = run_command(symbols_cmd, capture_output=True)
+            if result:
+                for line in result.stdout.split('\n'):
+                    line = line.strip()
+                    if 'External' in line or 'Static' in line:
+                        release_symbols.append(line)
+            
+            f.write(f"  Debug symbols count:   {len(debug_symbols)}\n")
+            f.write(f"  Release symbols count: {len(release_symbols)}\n")
+            
+            symbol_diff = len(debug_symbols) - len(release_symbols)
+            f.write(f"  Symbol difference: {symbol_diff} symbols\n")
+        
+        f.write("\n")
+        f.write("Directory Structure:\n")
+        f.write(f"  {output_base_dir}/\n")
+        f.write(f"  ├── debug/\n")
+        f.write(f"  │   ├── obj/                    # Debug .obj files\n")
+        f.write(f"  │   ├── asm/                    # Debug .asm files\n")
+        f.write(f"  │   └── extraction_report.txt   # Debug extraction report\n")
+        f.write(f"  ├── release/\n")
+        f.write(f"  │   ├── obj/                    # Release .obj files\n")
+        f.write(f"  │   ├── asm/                    # Release .asm files\n")
+        f.write(f"  │   └── extraction_report.txt   # Release extraction report\n")
+        f.write(f"  └── comparison_report.txt       # This comparison report\n")
+    
+    print(f"✓ Generated comparison report: {report_file}")
+
 def main():
     parser = argparse.ArgumentParser(description="Extract .obj and generate .asm files from utils.lib, or convert debug lib to release lib")
     parser.add_argument("--lib-file", 
@@ -462,13 +733,51 @@ def main():
                        help="Output path for converted release library (default: same directory as source with _release suffix)")
     parser.add_argument("--analyze-diff", action="store_true",
                        help="Analyze differences between debug and release libraries (requires --convert-to-release)")
+    parser.add_argument("--process-both", action="store_true",
+                       help="Process both Debug and Release configurations simultaneously")
     
     args = parser.parse_args()
     
     # 获取项目根目录
     project_root = os.path.dirname(os.path.abspath(__file__))
     
-    # 确定库文件路径
+    # 设置基础输出目录
+    output_base_dir = os.path.join(project_root, args.output_dir)
+    
+    print("=== Library Processing Tool ===")
+    
+    # 查找工具
+    lib_tool = find_lib_tool()
+    if not lib_tool:
+        print("Error: lib.exe not found. Please ensure Visual Studio is installed.")
+        return 1
+    
+    # 如果需要同时处理两个配置
+    if args.process_both:
+        print("Mode: Process both Debug and Release configurations")
+        
+        dumpbin_tool = find_dumpbin_tool()
+        if not dumpbin_tool:
+            print("Error: dumpbin.exe not found. Please ensure Visual Studio is installed.")
+            return 1
+        
+        if process_both_configurations(project_root, output_base_dir, lib_tool, dumpbin_tool, args.clean):
+            print(f"\n=== Both configurations processed successfully! ===")
+            print(f"Output directory: {output_base_dir}")
+            print(f"  - Debug files: {os.path.join(output_base_dir, 'debug')}")
+            print(f"  - Release files: {os.path.join(output_base_dir, 'release')}")
+            print(f"  - Comparison report: {os.path.join(output_base_dir, 'comparison_report.txt')}")
+            return 0
+        else:
+            print("Failed to process configurations")
+            return 1
+    
+    # 清理输出目录
+    if args.clean and os.path.exists(output_base_dir):
+        print("Cleaning output directory...")
+        shutil.rmtree(output_base_dir)
+    
+    # 确定库文件路径（对于单个配置处理）
     if args.lib_file:
         lib_file = args.lib_file
     else:
@@ -477,17 +786,12 @@ def main():
     if not os.path.exists(lib_file):
         print(f"Error: Library file not found: {lib_file}")
         print("Please build the project first or specify --lib-file")
+        if not args.process_both:
+            print("Or use --process-both to process existing configurations")
         return 1
     
-    print("=== Library Processing Tool ===")
     print(f"Library file: {lib_file}")
     print(f"Configuration: {args.config}")
-    
-    # 查找工具
-    lib_tool = find_lib_tool()
-    if not lib_tool:
-        print("Error: lib.exe not found. Please ensure Visual Studio is installed.")
-        return 1
     
     # 如果需要转换为release库，执行转换操作
     if args.convert_to_release:
@@ -508,10 +812,17 @@ def main():
             name_without_ext = os.path.splitext(lib_name)[0]
             release_lib_file = os.path.join(lib_dir, f"{name_without_ext}_release.lib")
         
+        # 创建转换专用的输出目录结构
+        conversion_output_dir = os.path.join(output_base_dir, "conversion")
+        os.makedirs(conversion_output_dir, exist_ok=True)
+        
         # 执行转换
-        if not convert_debug_to_release_lib(lib_file, release_lib_file, lib_tool, editbin_tool):
+        if not convert_debug_to_release_lib(lib_file, release_lib_file, lib_tool, editbin_tool, conversion_output_dir):
             print("Failed to convert debug library to release library")
             return 1
+        
+        # 生成转换报告
+        generate_conversion_report(lib_file, release_lib_file, conversion_output_dir)
         
         # 如果需要分析差异
         if args.analyze_diff:
@@ -524,26 +835,28 @@ def main():
         print(f"\n=== Conversion completed successfully! ===")
         print(f"Original (Debug): {lib_file}")
         print(f"Converted (Release): {release_lib_file}")
+        print(f"Conversion files: {conversion_output_dir}")
+        print(f"  - Debug .obj files: {os.path.join(conversion_output_dir, 'debug', 'obj')}")
+        print(f"  - Release .obj files: {os.path.join(conversion_output_dir, 'release', 'obj')}")
+        print(f"  - Conversion report: {os.path.join(conversion_output_dir, 'conversion_report.txt')}")
         return 0
     
-    # 原有的提取功能
+    # 原有的提取功能 - 根据配置创建相应的目录结构
     print("Mode: Extract and disassemble library")
-    print(f"Output directory: {args.output_dir}")
+    config_lower = args.config.lower()
+    print(f"Target configuration: {args.config}")
     
     dumpbin_tool = find_dumpbin_tool()
     if not dumpbin_tool:
         print("Error: dumpbin.exe not found. Please ensure Visual Studio is installed.")
         return 1
     
-    # 设置输出目录
-    output_dir = os.path.join(project_root, args.output_dir)
-    obj_dir = os.path.join(output_dir, "obj")
-    asm_dir = os.path.join(output_dir, "asm")
+    # 根据配置设置输出目录
+    config_output_dir = os.path.join(output_base_dir, config_lower)
+    obj_dir = os.path.join(config_output_dir, "obj")
+    asm_dir = os.path.join(config_output_dir, "asm")
     
-    # 清理输出目录
-    if args.clean and os.path.exists(output_dir):
-        print("Cleaning output directory...")
-        shutil.rmtree(output_dir)
+    print(f"Output directory: {config_output_dir}")
     
     # 提取.obj文件
     if not extract_obj_files(lib_file, obj_dir, lib_tool):
@@ -556,13 +869,14 @@ def main():
         return 1
     
     # 生成报告
-    generate_summary_report(lib_file, obj_dir, asm_dir, output_dir)
+    generate_summary_report(lib_file, obj_dir, asm_dir, config_output_dir)
     
-    print("\n=== Extraction completed successfully! ===")
-    print(f"Output directory: {output_dir}")
+    print(f"\n=== Extraction completed successfully! ===")
+    print(f"Configuration: {args.config}")
+    print(f"Output directory: {config_output_dir}")
     print(f"  - .obj files: {obj_dir}")
     print(f"  - .asm files: {asm_dir}")
-    print(f"  - Report: {os.path.join(output_dir, 'extraction_report.txt')}")
+    print(f"  - Report: {os.path.join(config_output_dir, 'extraction_report.txt')}")
     
     return 0
 

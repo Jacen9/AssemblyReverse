@@ -453,13 +453,59 @@ python extract_lib.py --clean
 # 指定自定义库文件
 python extract_lib.py --lib-file path/to/custom.lib
 
+# **新功能：同时处理Debug和Release两个配置**
+python extract_lib.py --process-both
+
 # 查看所有选项
 python extract_lib.py --help
 ```
 
-#### **新功能：Debug库转换为Release库**
+#### **新功能：同时处理Debug和Release配置**
 
-该脚本现在支持将debug静态库转换为release版本，通过移除调试信息来减小文件大小：
+该脚本现在支持一次性处理Debug和Release两个配置的库文件，自动提取、反汇编并生成对比报告：
+
+```bash
+# 基本用法：同时处理两个配置
+python extract_lib.py --process-both
+
+# 同时处理并清理旧输出
+python extract_lib.py --process-both --clean
+
+# 指定自定义输出目录
+python extract_lib.py --process-both --output-dir my_analysis
+```
+
+**同时处理功能特性：**
+- **自动检测**：自动查找Debug和Release库文件
+- **智能跳过**：如果某个配置不存在，会跳过并继续处理另一个
+- **并行处理**：同时处取两个配置的.obj和.asm文件
+- **对比分析**：自动生成两个配置的详细对比报告
+- **完整报告**：每个配置都有独立的提取报告
+
+**生成的目录结构：**
+```
+extracted/
+├── debug/
+│   ├── obj/                   # Debug .obj文件
+│   ├── asm/                   # Debug .asm文件
+│   └── extraction_report.txt  # Debug提取报告
+├── release/
+│   ├── obj/                   # Release .obj文件
+│   ├── asm/                   # Release .asm文件
+│   └── extraction_report.txt  # Release提取报告
+└── comparison_report.txt       # 自动生成的对比报告
+```
+
+**对比报告内容：**
+- 库文件大小对比和差异百分比
+- .obj文件数量和总大小对比
+- .asm文件数量和大小统计
+- 符号分析和差异统计
+- 完整的目录结构说明
+
+#### **Debug库转换为Release库**
+
+该脚本还支持将debug静态库转换为release版本，通过移除调试信息来减小文件大小：
 
 ```bash
 # 基本转换：将debug库转换为release库
@@ -539,6 +585,7 @@ Release symbols count: 856
 | `--config {Debug,Release}` | 构建配置（默认：Debug） |
 | `--output-dir DIR` | 提取文件的输出目录 |
 | `--clean` | 清理输出目录 |
+| `--process-both` | **新功能**：同时处理Debug和Release两个配置 |
 
 #### 工具要求
 
@@ -567,22 +614,66 @@ Release symbols count: 856
 
 ### 提取结果
 
-提取完成后，会在`extracted/`目录下生成：
+提取完成后，会根据不同的操作模式在`extracted/`目录下生成相应的子目录结构：
+
+#### 转换模式（Debug到Release转换）
 
 ```
 extracted/
-├── obj/                    # 提取的.obj文件
-│   ├── utils.obj          # 主要的目标文件
-│   └── ...                # 其他目标文件
-├── asm/                    # 生成的.asm文件
-│   ├── utils.asm          # 反汇编代码
-│   └── ...                # 其他汇编文件
-└── extraction_report.txt   # 提取报告
+└── conversion/
+    ├── debug/
+    │   └── obj/                # 原始debug .obj文件
+    │       ├── utils.obj
+    │       └── ...
+    ├── release/
+    │   └── obj/                # 处理后的release .obj文件
+    │       ├── utils.obj
+    │       └── ...
+    └── conversion_report.txt   # 转换报告
 ```
+
+#### 提取模式（根据配置区分）
+
+```
+extracted/
+├── debug/                      # Debug配置的提取结果
+│   ├── obj/                   # 提取的.obj文件
+│   │   ├── utils.obj
+│   │   └── ...
+│   ├── asm/                   # 生成的.asm文件
+│   │   ├── utils.asm
+│   │   └── ...
+│   └── extraction_report.txt  # 提取报告
+└── release/                    # Release配置的提取结果
+    ├── obj/                   # 提取的.obj文件
+    │   ├── utils.obj
+    │   └── ...
+    ├── asm/                   # 生成的.asm文件
+    │   ├── utils.asm
+    │   └── ...
+    └── extraction_report.txt  # 提取报告
+```
+
+这种目录结构的优势：
+- **清晰分离**：Debug和Release文件分别存储，避免混淆
+- **便于比较**：可以直接对比debug和release版本的差异
+- **模块化组织**：转换操作和提取操作分别组织
+- **可追溯性**：每个操作都有相应的报告文件
 
 ### 转换用例
 
-#### 1. 开发到发布工作流
+#### 1. 同时分析两个配置（推荐）
+```bash
+# 一次性处理Debug和Release配置
+python extract_lib.py --process-both
+
+# 结果：
+# extracted/debug/        - Debug版本的完整分析
+# extracted/release/      - Release版本的完整分析  
+# extracted/comparison_report.txt - 自动生成的对比报告
+```
+
+#### 2. 开发到发布工作流
 ```bash
 # 开发阶段：使用debug库进行开发和调试
 python bootstrap.py --config Debug
@@ -590,46 +681,64 @@ python bootstrap.py --config Debug
 # 发布阶段：转换为release库
 python extract_lib.py --convert-to-release --analyze-diff
 
+# 结果：extracted/conversion/目录包含debug和release的.obj文件对比
 # 分发：使用更小的release库
 ```
 
-#### 2. 库文件优化
+#### 3. 库文件优化比较
 ```bash
-# 比较不同版本的库大小
-python extract_lib.py --lib-file old_version.lib --convert-to-release --analyze-diff
-python extract_lib.py --lib-file new_version.lib --convert-to-release --analyze-diff
+# 方法1：使用新的同时处理功能（推荐）
+python extract_lib.py --process-both
+
+# 方法2：分别提取两个版本
+python extract_lib.py --config Debug --output-dir extracted
+python extract_lib.py --config Release --output-dir extracted
+
+# 现在可以比较extracted/debug/和extracted/release/目录中的差异
 ```
 
-#### 3. 逆向工程准备
+#### 4. Debug到Release转换分析
 ```bash
-# 准备用于逆向分析的清洁版本
+# 转换debug库到release并保存中间文件
+python extract_lib.py --convert-to-release --analyze-diff
+
+# 查看转换结果：
+# - extracted/conversion/debug/obj/     - 原始debug .obj文件
+# - extracted/conversion/release/obj/   - 处理后的release .obj文件  
+# - extracted/conversion/conversion_report.txt - 详细转换报告
+```
+
+#### 5. 逆向工程准备
+```bash
+# 方法1：准备两个配置进行对比分析
+python extract_lib.py --process-both --output-dir reverse_analysis
+
+# 方法2：准备清洁的release版本
 python extract_lib.py --convert-to-release --release-lib-output clean_version.lib
-python extract_lib.py --lib-file clean_version.lib --output-dir clean_extracted
+python extract_lib.py --lib-file clean_version.lib --config Release --output-dir clean_extracted
+
+# 结果：clean_extracted/release/目录包含清洁的分析文件
 ```
 
-#### 4. 错误排查
+#### 6. 高级分析工作流
+```bash
+# 完整的分析流程
+# 1. 构建两个配置
+python bootstrap.py --config Debug
+python bootstrap.py --config Release
 
-**常见问题及解决方案：**
+# 2. 同时处理两个配置
+python extract_lib.py --process-both --clean
 
-1. **"lib.exe not found"** / **"editbin.exe not found"**
-   - 确保已安装Visual Studio with C++ tools
-   - 检查工具是否在PATH中
+# 3. 执行debug到release转换
+python extract_lib.py --convert-to-release --analyze-diff
 
-2. **转换失败**
-   - 检查输入库文件是否存在
-   - 确认有足够的磁盘空间
-   - 验证文件权限
-
-3. **大小减少不明显**
-   - 原库可能已经是release版本
-   - 检查原库是否在debug模式下编译
-
-### 集成和扩展
-
-转换功能与现有提取功能完全兼容：
-- 可以对转换后的release库执行提取操作
-- 支持链式操作完成完整的分析工作流
-- 保持所有现有命令行参数的兼容性
+# 4. 现在拥有三种不同的分析结果：
+# extracted/debug/        - Debug版本直接提取结果
+# extracted/release/      - Release版本直接提取结果  
+# extracted/conversion/   - Debug转Release的处理过程
+# extracted/comparison_report.txt - Debug vs Release对比报告
+```
 
 ## 运行程序
 
@@ -770,3 +879,52 @@ cd build/bin/Debug
 ## 联系信息
 
 如有问题或建议，请通过项目仓库提交Issue。 
+
+#### 7. 错误排查
+
+**常见问题及解决方案：**
+
+1. **"lib.exe not found"** / **"editbin.exe not found"**
+   - 确保已安装Visual Studio with C++ tools
+   - 检查工具是否在PATH中
+
+2. **"Neither Debug nor Release library files found"**
+   - 先构建项目：`python bootstrap.py --config Debug` 和 `python bootstrap.py --config Release`
+   - 检查`build/lib/Debug/utils.lib`和`build/lib/Release/utils.lib`是否存在
+
+3. **转换失败**
+   - 检查输入库文件是否存在
+   - 确认有足够的磁盘空间
+   - 验证文件权限
+
+4. **大小减少不明显**
+   - 原库可能已经是release版本
+   - 检查原库是否在debug模式下编译
+   - 查看conversion_report.txt了解详细信息
+
+5. **目录结构混乱**
+   - 使用--clean选项清理输出目录
+   - 确保使用正确的--config参数
+   - 检查--output-dir参数设置
+
+### 集成和扩展
+
+新的同时处理功能与现有功能完全兼容：
+- **自动检测**：智能检测可用的配置文件
+- **分层组织**：不同操作模式创建相应的目录结构
+- **链式操作**：可以对转换后的release库执行提取操作
+- **并行分析**：同时提取debug和release版本进行对比
+- **向后兼容**：保持所有现有命令行参数的兼容性
+
+**功能组合示例：**
+```bash
+# 同时处理 + 清理
+python extract_lib.py --process-both --clean
+
+# 单独转换 + 同时分析
+python extract_lib.py --convert-to-release
+python extract_lib.py --process-both --output-dir full_analysis
+
+# 自定义输出 + 对比分析
+python extract_lib.py --process-both --output-dir custom_output --clean
+``` 
