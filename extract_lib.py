@@ -3,6 +3,7 @@
 """
 Library Extraction Script for Assembly Reverse Engineering
 This script extracts .obj files from utils.lib and generates .asm files
+Also supports converting debug libraries to release libraries
 """
 
 import os
@@ -11,6 +12,7 @@ import subprocess
 import argparse
 import shutil
 import glob
+import tempfile
 from pathlib import Path
 
 def run_command(cmd, cwd=None, capture_output=True):
@@ -128,6 +130,49 @@ def find_dumpbin_tool():
             if "Microsoft" in result.stdout or result.returncode == 0:
                 print(f"Found dumpbin.exe in PATH: {dumpbin_path}")
                 return dumpbin_path
+        except FileNotFoundError:
+            continue
+    
+    return None
+
+def find_editbin_tool():
+    """查找editbin.exe工具"""
+    editbin_paths = [
+        "editbin",
+        "editbin.exe"
+    ]
+    
+    # 查找Visual Studio安装路径中的editbin.exe
+    vs_paths = [
+        "C:\\Program Files (x86)\\Microsoft Visual Studio\\2017",
+        "C:\\Program Files\\Microsoft Visual Studio\\2017",
+        "C:\\Program Files (x86)\\Microsoft Visual Studio\\2019",
+        "C:\\Program Files\\Microsoft Visual Studio\\2019",
+        "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022",
+        "C:\\Program Files\\Microsoft Visual Studio\\2022"
+    ]
+    
+    for vs_path in vs_paths:
+        if os.path.exists(vs_path):
+            for edition in ["Enterprise", "Professional", "Community"]:
+                editbin_path = os.path.join(vs_path, edition, "VC", "Tools", "MSVC")
+                if os.path.exists(editbin_path):
+                    # 查找最新版本
+                    versions = [d for d in os.listdir(editbin_path) if os.path.isdir(os.path.join(editbin_path, d))]
+                    if versions:
+                        latest_version = sorted(versions)[-1]
+                        editbin_exe = os.path.join(editbin_path, latest_version, "bin", "Hostx64", "x64", "editbin.exe")
+                        if os.path.exists(editbin_exe):
+                            print(f"Found editbin.exe: {editbin_exe}")
+                            return editbin_exe
+    
+    # 尝试从PATH中查找
+    for editbin_path in editbin_paths:
+        try:
+            result = subprocess.run([editbin_path, "/?"], capture_output=True, text=True)
+            if "Microsoft" in result.stdout or result.returncode == 0:
+                print(f"Found editbin.exe in PATH: {editbin_path}")
+                return editbin_path
         except FileNotFoundError:
             continue
     
@@ -257,8 +302,152 @@ def generate_summary_report(lib_file, obj_dir, asm_dir, output_dir):
     
     print(f"✓ Generated extraction report: {report_file}")
 
+def convert_debug_to_release_lib(debug_lib_file, release_lib_file, lib_tool, editbin_tool):
+    """将debug库转换为release库"""
+    print(f"\n=== Converting debug library to release library ===")
+    print(f"Source (Debug): {debug_lib_file}")
+    print(f"Target (Release): {release_lib_file}")
+    
+    if not os.path.exists(debug_lib_file):
+        print(f"Error: Debug library file not found: {debug_lib_file}")
+        return False
+    
+    # 创建临时目录用于处理
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_obj_dir = os.path.join(temp_dir, "obj")
+        os.makedirs(temp_obj_dir, exist_ok=True)
+        
+        # 步骤1: 从debug库中提取所有.obj文件
+        print("Step 1: Extracting .obj files from debug library...")
+        if not extract_obj_files(debug_lib_file, temp_obj_dir, lib_tool):
+            print("Failed to extract .obj files from debug library")
+            return False
+        
+        # 步骤2: 处理每个.obj文件，移除调试信息
+        print("Step 2: Processing .obj files to remove debug information...")
+        obj_files = glob.glob(os.path.join(temp_obj_dir, "*.obj"))
+        processed_obj_files = []
+        
+        for obj_file in obj_files:
+            processed_obj = process_obj_for_release(obj_file, editbin_tool)
+            if processed_obj:
+                processed_obj_files.append(processed_obj)
+            else:
+                print(f"Warning: Failed to process {os.path.basename(obj_file)}, using original")
+                processed_obj_files.append(obj_file)
+        
+        # 步骤3: 创建新的release库
+        print("Step 3: Creating release library...")
+        if not create_release_library(processed_obj_files, release_lib_file, lib_tool):
+            print("Failed to create release library")
+            return False
+    
+    print(f"✓ Successfully converted debug library to release library: {release_lib_file}")
+    return True
+
+def process_obj_for_release(obj_file, editbin_tool):
+    """处理单个.obj文件以移除调试信息"""
+    try:
+        # 创建处理后的文件副本
+        processed_obj = obj_file + ".processed"
+        shutil.copy2(obj_file, processed_obj)
+        
+        # 使用editbin移除调试信息
+        # /NOLOGO: 不显示版权信息
+        # /REMOVE:.debug$S: 移除调试符号段
+        # /REMOVE:.debug$T: 移除调试类型段
+        # /REMOVE:.debug$F: 移除调试文件段
+        editbin_cmd = [
+            editbin_tool,
+            "/NOLOGO",
+            "/REMOVE:.debug$S",
+            "/REMOVE:.debug$T", 
+            "/REMOVE:.debug$F",
+            processed_obj
+        ]
+        
+        result = run_command(editbin_cmd, capture_output=True)
+        if result is not None:
+            print(f"✓ Processed: {os.path.basename(obj_file)}")
+            return processed_obj
+        else:
+            print(f"✗ Failed to process: {os.path.basename(obj_file)}")
+            # 如果处理失败，删除处理后的文件
+            if os.path.exists(processed_obj):
+                os.remove(processed_obj)
+            return None
+            
+    except Exception as e:
+        print(f"Error processing {os.path.basename(obj_file)}: {e}")
+        return None
+
+def create_release_library(obj_files, output_lib, lib_tool):
+    """从.obj文件创建release库"""
+    if not obj_files:
+        print("No .obj files to create library from")
+        return False
+    
+    # 确保输出目录存在
+    os.makedirs(os.path.dirname(output_lib), exist_ok=True)
+    
+    # 构建lib命令
+    lib_cmd = [lib_tool, "/NOLOGO", "/OUT:" + output_lib]
+    lib_cmd.extend(obj_files)
+    
+    print(f"Creating library with {len(obj_files)} object files...")
+    result = run_command(lib_cmd, capture_output=True)
+    
+    if result is not None:
+        print(f"✓ Created release library: {output_lib}")
+        return True
+    else:
+        print(f"✗ Failed to create release library")
+        return False
+
+def analyze_library_differences(debug_lib, release_lib, dumpbin_tool):
+    """分析debug和release库的差异"""
+    print(f"\n=== Analyzing library differences ===")
+    
+    def get_lib_info(lib_file):
+        """获取库文件信息"""
+        if not os.path.exists(lib_file):
+            return None
+            
+        info = {
+            'size': os.path.getsize(lib_file),
+            'symbols': [],
+            'sections': []
+        }
+        
+        # 获取符号信息
+        symbols_cmd = [dumpbin_tool, "/SYMBOLS", lib_file]
+        result = run_command(symbols_cmd, capture_output=True)
+        if result:
+            for line in result.stdout.split('\n'):
+                line = line.strip()
+                if 'External' in line or 'Static' in line:
+                    info['symbols'].append(line)
+        
+        return info
+    
+    debug_info = get_lib_info(debug_lib)
+    release_info = get_lib_info(release_lib)
+    
+    if not debug_info or not release_info:
+        print("Failed to analyze one or both libraries")
+        return
+    
+    print(f"Debug library size: {debug_info['size']:,} bytes")
+    print(f"Release library size: {release_info['size']:,} bytes")
+    size_reduction = debug_info['size'] - release_info['size']
+    reduction_percent = (size_reduction / debug_info['size']) * 100 if debug_info['size'] > 0 else 0
+    print(f"Size reduction: {size_reduction:,} bytes ({reduction_percent:.1f}%)")
+    
+    print(f"Debug symbols count: {len(debug_info['symbols'])}")
+    print(f"Release symbols count: {len(release_info['symbols'])}")
+
 def main():
-    parser = argparse.ArgumentParser(description="Extract .obj and generate .asm files from utils.lib")
+    parser = argparse.ArgumentParser(description="Extract .obj and generate .asm files from utils.lib, or convert debug lib to release lib")
     parser.add_argument("--lib-file", 
                        help="Path to the .lib file (default: auto-detect from build directory)")
     parser.add_argument("--config", default="Debug", choices=["Debug", "Release"],
@@ -267,6 +456,12 @@ def main():
                        help="Output directory for extracted files (default: extracted)")
     parser.add_argument("--clean", action="store_true",
                        help="Clean output directory before extraction")
+    parser.add_argument("--convert-to-release", action="store_true",
+                       help="Convert debug library to release library")
+    parser.add_argument("--release-lib-output",
+                       help="Output path for converted release library (default: same directory as source with _release suffix)")
+    parser.add_argument("--analyze-diff", action="store_true",
+                       help="Analyze differences between debug and release libraries (requires --convert-to-release)")
     
     args = parser.parse_args()
     
@@ -284,16 +479,56 @@ def main():
         print("Please build the project first or specify --lib-file")
         return 1
     
-    print("=== Library Extraction Tool ===")
+    print("=== Library Processing Tool ===")
     print(f"Library file: {lib_file}")
     print(f"Configuration: {args.config}")
-    print(f"Output directory: {args.output_dir}")
     
     # 查找工具
     lib_tool = find_lib_tool()
     if not lib_tool:
         print("Error: lib.exe not found. Please ensure Visual Studio is installed.")
         return 1
+    
+    # 如果需要转换为release库，执行转换操作
+    if args.convert_to_release:
+        print("Mode: Convert debug library to release library")
+        
+        # 查找editbin工具
+        editbin_tool = find_editbin_tool()
+        if not editbin_tool:
+            print("Error: editbin.exe not found. Please ensure Visual Studio is installed.")
+            return 1
+        
+        # 确定release库输出路径
+        if args.release_lib_output:
+            release_lib_file = args.release_lib_output
+        else:
+            lib_dir = os.path.dirname(lib_file)
+            lib_name = os.path.basename(lib_file)
+            name_without_ext = os.path.splitext(lib_name)[0]
+            release_lib_file = os.path.join(lib_dir, f"{name_without_ext}_release.lib")
+        
+        # 执行转换
+        if not convert_debug_to_release_lib(lib_file, release_lib_file, lib_tool, editbin_tool):
+            print("Failed to convert debug library to release library")
+            return 1
+        
+        # 如果需要分析差异
+        if args.analyze_diff:
+            dumpbin_tool = find_dumpbin_tool()
+            if dumpbin_tool:
+                analyze_library_differences(lib_file, release_lib_file, dumpbin_tool)
+            else:
+                print("Warning: dumpbin.exe not found, skipping difference analysis")
+        
+        print(f"\n=== Conversion completed successfully! ===")
+        print(f"Original (Debug): {lib_file}")
+        print(f"Converted (Release): {release_lib_file}")
+        return 0
+    
+    # 原有的提取功能
+    print("Mode: Extract and disassemble library")
+    print(f"Output directory: {args.output_dir}")
     
     dumpbin_tool = find_dumpbin_tool()
     if not dumpbin_tool:

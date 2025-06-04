@@ -435,10 +435,11 @@ bootstrap脚本会自动生成完整的Visual Studio 2017解决方案文件：
 
 ## 库文件提取和汇编分析
 
-项目提供了专门的工具来提取静态库中的目标文件(.obj)并生成汇编文件(.asm)：
+项目提供了专门的工具来提取静态库中的目标文件(.obj)并生成汇编文件(.asm)，同时支持将debug库转换为release库：
 
-### 使用Python脚本提取
+### 使用Python脚本提取和转换
 
+#### 基本提取功能
 ```bash
 # 从Debug构建提取
 python extract_lib.py
@@ -455,6 +456,98 @@ python extract_lib.py --lib-file path/to/custom.lib
 # 查看所有选项
 python extract_lib.py --help
 ```
+
+#### **新功能：Debug库转换为Release库**
+
+该脚本现在支持将debug静态库转换为release版本，通过移除调试信息来减小文件大小：
+
+```bash
+# 基本转换：将debug库转换为release库
+python extract_lib.py --convert-to-release
+
+# 转换并分析差异
+python extract_lib.py --convert-to-release --analyze-diff
+
+# 指定输入和输出文件
+python extract_lib.py \
+    --lib-file build/lib/Debug/utils.lib \
+    --convert-to-release \
+    --release-lib-output build/lib/Release/utils.lib
+
+# 完整工作流程：转换 -> 分析 -> 提取
+python extract_lib.py --convert-to-release --analyze-diff
+python extract_lib.py --lib-file utils_release.lib --output-dir extracted_release
+```
+
+#### 转换功能特性
+
+**转换过程：**
+1. **提取**：从debug库中提取所有.obj文件
+2. **处理**：使用`editbin.exe`移除调试段（.debug$S, .debug$T, .debug$F）
+3. **重建**：使用`lib.exe`从处理后的.obj文件创建新库
+4. **分析**：可选的差异分析
+
+**预期效果：**
+- **文件大小减少**：通常减少30-70%
+- **移除调试信息**：不包含源码路径、行号等敏感信息
+- **保持功能完整**：所有函数和符号保持可用
+- **优化分发**：更适合发布和分发
+
+**示例输出：**
+```
+=== Converting debug library to release library ===
+Source (Debug): build/lib/Debug/utils.lib
+Target (Release): build/lib/Debug/utils_release.lib
+
+Step 1: Extracting .obj files from debug library...
+Found 5 .obj files:
+  - utils.obj
+  - math_ops.obj
+  - string_ops.obj
+  - file_ops.obj
+  - memory_ops.obj
+
+Step 2: Processing .obj files to remove debug information...
+✓ Processed: utils.obj
+✓ Processed: math_ops.obj
+✓ Processed: string_ops.obj
+✓ Processed: file_ops.obj
+✓ Processed: memory_ops.obj
+
+Step 3: Creating release library...
+Creating library with 5 object files...
+✓ Created release library: utils_release.lib
+
+=== Analyzing library differences ===
+Debug library size: 2,458,624 bytes
+Release library size: 892,416 bytes
+Size reduction: 1,566,208 bytes (63.7%)
+Debug symbols count: 1,247
+Release symbols count: 856
+
+✓ Successfully converted debug library to release library
+```
+
+#### 命令行选项
+
+| 选项 | 描述 |
+|------|------|
+| `--convert-to-release` | 启用debug到release转换模式 |
+| `--release-lib-output PATH` | 指定release库的输出路径 |
+| `--analyze-diff` | 分析debug和release库的差异 |
+| `--lib-file PATH` | 指定输入库文件路径 |
+| `--config {Debug,Release}` | 构建配置（默认：Debug） |
+| `--output-dir DIR` | 提取文件的输出目录 |
+| `--clean` | 清理输出目录 |
+
+#### 工具要求
+
+转换功能需要以下Microsoft Visual Studio工具：
+- `lib.exe` - Microsoft库管理器
+- `editbin.exe` - Microsoft二进制编辑器  
+- `dumpbin.exe` - Microsoft二进制分析器（用于差异分析）
+
+这些工具随Visual Studio自动安装。
 
 ### 使用批处理脚本提取
 
@@ -486,6 +579,57 @@ extracted/
 │   └── ...                # 其他汇编文件
 └── extraction_report.txt   # 提取报告
 ```
+
+### 转换用例
+
+#### 1. 开发到发布工作流
+```bash
+# 开发阶段：使用debug库进行开发和调试
+python bootstrap.py --config Debug
+
+# 发布阶段：转换为release库
+python extract_lib.py --convert-to-release --analyze-diff
+
+# 分发：使用更小的release库
+```
+
+#### 2. 库文件优化
+```bash
+# 比较不同版本的库大小
+python extract_lib.py --lib-file old_version.lib --convert-to-release --analyze-diff
+python extract_lib.py --lib-file new_version.lib --convert-to-release --analyze-diff
+```
+
+#### 3. 逆向工程准备
+```bash
+# 准备用于逆向分析的清洁版本
+python extract_lib.py --convert-to-release --release-lib-output clean_version.lib
+python extract_lib.py --lib-file clean_version.lib --output-dir clean_extracted
+```
+
+#### 4. 错误排查
+
+**常见问题及解决方案：**
+
+1. **"lib.exe not found"** / **"editbin.exe not found"**
+   - 确保已安装Visual Studio with C++ tools
+   - 检查工具是否在PATH中
+
+2. **转换失败**
+   - 检查输入库文件是否存在
+   - 确认有足够的磁盘空间
+   - 验证文件权限
+
+3. **大小减少不明显**
+   - 原库可能已经是release版本
+   - 检查原库是否在debug模式下编译
+
+### 集成和扩展
+
+转换功能与现有提取功能完全兼容：
+- 可以对转换后的release库执行提取操作
+- 支持链式操作完成完整的分析工作流
+- 保持所有现有命令行参数的兼容性
 
 ## 运行程序
 
